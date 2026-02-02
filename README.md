@@ -132,7 +132,7 @@ Injector(
 
 #### Methods
 
-- `inject_variables(variables: Dict[str, any])`: Inject variable assignments
+- `inject_variables(variables: Dict[str, Any])`: Inject variable assignments
 - `add_dependency(packages: list)`: Add pip install commands
 - `inject_function(code: str, func_name: str)`: Replace function body
 - `get_code()`: Get modified code as string

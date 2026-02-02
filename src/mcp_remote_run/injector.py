@@ -2,7 +2,7 @@ import libcst as cst
 import tempfile
 import os
 import shutil
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 
 class Injector:
@@ -76,13 +76,12 @@ class Injector:
         }
         return type_map.get(type(value), lambda v: cst.SimpleString(f'"{str(v)}"'))(value)
 
-    def inject_variables(self, variables: Dict[str, any]):
+    def inject_variables(self, variables: Dict[str, Any]):
         """
         Inject variable assignments into the file.
 
         Args:
             variables: Dictionary of variable names and values
-            at_top: If True, injects at top of file; if False, at end
 
         Returns:
             self (for chaining)
