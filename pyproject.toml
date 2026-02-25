@@ -1,0 +1,13 @@
+[project]
+name = "mcp-remote-run"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "codecarbon>=3.2.2",
+    "fief-client>=0.20.0",
+    "requests>=2.32.5",
+    "rich>=14.3.2",
+    "yaspin>=3.4.0",
+]
