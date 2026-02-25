@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codeecarbon-mcp"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+authors = [
+    { name = "Enzo Fernandez", email = "enzofernandezecole@gmail.com" },
+    { name = "Lucas Fritsch" },
+    { name = "Axel Malherbe" },
+    { name = "Jordi Oszust" }
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "alembic<2.0.0",
+    "bcrypt<5.0.0",
+    "python-dateutil<3.0.0",
+    "dependency-injector<5.0.0",
+    "fastapi[standard]<1.0.0",
+    "fief-client[fastapi]",
+    "httpx",
+    "psycopg2-binary<3.0.0",
+    "requests<3.0.0",
+    "sqlalchemy<2.0.0",
+    "uvicorn[standard]<1.0.0",
+    "fastapi-pagination<1.0.0",
+    "numpy",
+    "psutil",
+    "rapidfuzz",
+    "PyJWT",
+    "fastapi-oidc>=0.0.9",
+    "mcp>=1.13.0",
+    "codecarbon>=3.2.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "mock",
+    "responses",
+    "requests-mock",
+]
+
+[project.urls]
+Homepage = "https://codecarbon.io/"
+Repository = "https://github.com/mlco2/codecarbon"
+Dashboard = "http://dashboard.codecarbon.io/"
+Documentation = "https://mlco2.github.io/codecarbon/"
+Issues = "https://github.com/mlco2/codecarbon/issues"
+Changelog = "https://github.com/mlco2/codecarbon/releases"
+
+[tool.hatch.build.targets.wheel]
+packages = ["carbonserver"]
+
+[tool.hatch.build]
+include = ["carbonserver"]
+
+[tool.pytest.ini_options]
+pythonpath = "."
