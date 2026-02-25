@@ -1,2 +1,6 @@
-# mcp-remote-run
-MCP Server to run code on a remote server and monitor it with CodeCarbon.
+# CodeCarbon MCP server
+
+MCP Server for CodeCarbon.
+
+Run it with `uvx https://github.com/mlco2/codecarbon-mcp`
+
