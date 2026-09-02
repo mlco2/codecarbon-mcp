@@ -23,7 +23,7 @@ dependencies = [
     "python-dateutil<3.0.0",
     "dependency-injector<5.0.0",
     "fastapi[standard]<1.0.0",
-    "fief-client[fastapi]",
+    "fief-client[cli,fastapi]",
     "httpx",
     "psycopg2-binary<3.0.0",
     "requests<3.0.0",
@@ -37,6 +37,7 @@ dependencies = [
     "fastapi-oidc>=0.0.9",
     "mcp>=1.13.0",
     "codecarbon>=3.2.3",
+    "rich",
 ]
 
 [project.optional-dependencies]
