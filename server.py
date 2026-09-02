@@ -11,22 +11,82 @@ projects, experiments, and recommendations).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-from typing import Optional, Dict, Any
-from datetime import datetime
+from typing import Dict, Any
 import logging
 
 from mcp.server.fastmcp import FastMCP
-from codecarbon import EmissionsTracker
 from analysis import aggregate_run_summaries, select_lowest_consumption_experiment
 from client import CodeCarbonApiClient
+from tracker import CodeCarbonTracker
 
 # Initialize the MCP server
 mcp = FastMCP("codecarbon")
 
-# Global tracker for local energy tracking
-tracker: Optional[EmissionsTracker] = None
-start_time: Optional[datetime] = None
+# Single tracking session shared by the local tracking tools
+session = CodeCarbonTracker()
+
+
+# ---------------------------------------------------------------------------
+# Shell execution policy
+# ---------------------------------------------------------------------------
+#
+# The run_and_measure tool executes an arbitrary shell command on the machine
+# hosting this server. That is reasonable for a *local* server: the MCP host
+# already runs on the user's own machine, so the tool grants no privilege the
+# client did not already have. It is NOT reasonable for a server reachable over
+# the network, where it would hand every client a remote shell on this host.
+#
+# run_and_measure is therefore registered only when the server speaks stdio, and
+# refuses to run if the transport turns out to be anything else.
+
+# FastMCP transports that imply the client is on this machine.
+LOCAL_TRANSPORTS = frozenset({"stdio"})
+
+DEFAULT_TRANSPORT = "stdio"
+
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def resolve_transport() -> str:
+    """
+    Determine which transport the server will use.
+
+    Returns:
+        The value of the CODECARBON_MCP_TRANSPORT environment variable,
+        lowercased, or 'stdio' when it is unset. Recognised values are the ones
+        accepted by FastMCP: 'stdio', 'sse' and 'streamable-http'.
+    """
+    return os.environ.get("CODECARBON_MCP_TRANSPORT", DEFAULT_TRANSPORT).strip().lower()
+
+
+def shell_execution_allowed(transport: str | None = None) -> bool:
+    """
+    Report whether run_and_measure may execute shell commands.
+
+    Shell execution is permitted only over a local transport. Setting
+    CODECARBON_MCP_ALLOW_SHELL to a false value ('0', 'false', 'no', 'off')
+    disables it even locally. There is deliberately no way to enable it for a
+    remote transport: exposing a shell over the network is never the intent of
+    this server.
+
+    Args:
+        transport: Transport to evaluate. Defaults to resolve_transport().
+
+    Returns:
+        True if shell commands may be executed, False otherwise.
+    """
+    transport = transport if transport is not None else resolve_transport()
+
+    if transport not in LOCAL_TRANSPORTS:
+        return False
+
+    override = os.environ.get("CODECARBON_MCP_ALLOW_SHELL")
+    if override is not None:
+        return override.strip().lower() in _TRUTHY
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +94,10 @@ start_time: Optional[datetime] = None
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def start_tracking(measure_power_secs: int = 15) -> Dict[str, Any]:
+async def start_tracking(
+    measure_power_secs: int = 15,
+    save_to_file: bool = True
+) -> Dict[str, Any]:
     """
     Start energy tracking with CodeCarbon.
 
@@ -46,6 +109,8 @@ async def start_tracking(measure_power_secs: int = 15) -> Dict[str, Any]:
         measure_power_secs: Interval in seconds between power measurements.
             Lower values give finer granularity but increase overhead.
             Defaults to 15.
+        save_to_file: Whether CodeCarbon should also append the results to its
+            CSV output file. Defaults to True.
 
     Returns:
         A dict with the following keys:
@@ -57,29 +122,10 @@ async def start_tracking(measure_power_secs: int = 15) -> Dict[str, Any]:
             - measurement_interval (int): The power measurement interval in seconds.
                 Only present when status is 'started'.
     """
-    global tracker, start_time
-
-    if tracker is not None:
-        return {
-            "status": "already_running",
-            "message": "Tracking is already in progress."
-        }
-
-    tracker = EmissionsTracker(
-        project_name="mcp-codecarbon-tracking",
+    return session.start(
         measure_power_secs=measure_power_secs,
-        log_level="info"
+        save_to_file=save_to_file
     )
-
-    tracker.start()
-    start_time = datetime.now()
-
-    return {
-        "status": "started",
-        "start_time": start_time.isoformat(),
-        "project_name": tracker._project_name,
-        "measurement_interval": measure_power_secs
-    }
 
 
 @mcp.tool()
@@ -88,7 +134,7 @@ async def stop_tracking() -> Dict[str, Any]:
     Stop the active energy tracking session and return final metrics.
 
     Finalizes the current EmissionsTracker session, computes total
-    emissions, and clears the global tracker state.
+    emissions, and clears the tracking state.
 
     Returns:
         A dict with the following keys:
@@ -97,28 +143,15 @@ async def stop_tracking() -> Dict[str, Any]:
                 session, rounded to 2 decimal places.
             - emissions_kg_co2 (float): Total CO2 equivalent emissions
                 measured during the session, in kilograms.
+            - energy_consumed_kwh, cpu_energy_kwh, gpu_energy_kwh,
+                ram_energy_kwh (float): Energy breakdown in kilowatt-hours.
+            - country_name, country_iso_code (str): Location used to convert
+                energy into emissions.
 
     Raises:
         RuntimeError: If no tracking session is currently active.
     """
-    global tracker, start_time
-
-    if tracker is None:
-        raise RuntimeError("No active tracking session.")
-
-    emissions = tracker.stop()
-    end_time = datetime.now()
-
-    duration = (end_time - start_time).total_seconds() if start_time else 0
-
-    tracker = None
-    start_time = None
-
-    return {
-        "status": "stopped",
-        "duration_seconds": round(duration, 2),
-        "emissions_kg_co2": emissions
-    }
+    return session.stop()
 
 
 @mcp.tool()
@@ -136,15 +169,7 @@ async def get_status() -> Dict[str, Any]:
             - start_time (str | None): ISO 8601 timestamp of when the active
                 session started. Only present when status is 'tracking'.
     """
-    if tracker is None:
-        return {
-            "status": "not_tracking"
-        }
-
-    return {
-        "status": "tracking",
-        "start_time": start_time.isoformat() if start_time else None
-    }
+    return session.status()
 
 
 @mcp.tool()
@@ -153,7 +178,9 @@ async def get_current_metrics() -> Dict[str, Any]:
     Return timing information about the ongoing tracking session.
 
     Provides a snapshot of elapsed time without stopping the tracker.
-    Useful for monitoring long-running sessions.
+    Useful for monitoring long-running sessions. CodeCarbon does not expose
+    intermediate energy readings, so no consumption figures are available
+    before the session is stopped.
 
     Returns:
         A dict with the following keys:
@@ -166,18 +193,71 @@ async def get_current_metrics() -> Dict[str, Any]:
     Raises:
         RuntimeError: If no tracking session is currently active.
     """
-    if tracker is None or start_time is None:
-        raise RuntimeError("No active tracking session.")
+    return session.elapsed()
 
-    now = datetime.now()
-    duration = (now - start_time).total_seconds()
 
-    return {
-        "status": "tracking",
-        "start_time": start_time.isoformat(),
-        "current_time": now.isoformat(),
-        "duration_seconds": round(duration, 2)
-    }
+async def run_and_measure(
+    command: str,
+    measure_power_secs: int = 15,
+    save_to_file: bool = False
+) -> Dict[str, Any]:
+    """
+    Run a shell command and measure its energy footprint.
+
+    Starts a tracking session, runs the command to completion, stops the
+    session, and returns the measured consumption together with the command's
+    output. Any tracking session already in progress is restarted.
+
+    Measurement covers the whole machine for the duration of the command, not
+    the command's process alone.
+
+    SECURITY: the command is passed to the system shell without sanitisation,
+    which gives the caller full control of the account running this server. The
+    tool is only registered when the server runs locally over stdio; see
+    shell_execution_allowed().
+
+    Args:
+        command: Shell command to execute (e.g. 'python3 my_script.py').
+            Commands that do not terminate within 300 seconds are killed.
+        measure_power_secs: Interval in seconds between power measurements.
+            Defaults to 15.
+        save_to_file: Whether CodeCarbon should also append the results to its
+            CSV output file. Defaults to False.
+
+    Returns:
+        The dict returned by stop_tracking, plus:
+            - command (str): The command that was executed.
+            - returncode (int): Exit status of the command.
+            - stdout (str): Last 2000 characters of standard output.
+            - stderr (str): Last 2000 characters of standard error.
+
+    Raises:
+        RuntimeError: If shell execution is disabled for this transport, or if
+            the command could not be run to completion.
+    """
+    if not shell_execution_allowed():
+        raise RuntimeError(
+            "Shell execution is disabled. run_and_measure is only available "
+            "when this server runs locally over the stdio transport."
+        )
+
+    return session.run_and_measure(
+        command=command,
+        measure_power_secs=measure_power_secs,
+        save_to_file=save_to_file
+    )
+
+
+# Register run_and_measure only for a local server, so a networked deployment
+# does not even advertise a shell-execution tool to its clients.
+if shell_execution_allowed():
+    mcp.tool()(run_and_measure)
+else:
+    logging.warning(
+        "run_and_measure is not available: shell execution is disabled for "
+        "transport '%s'.",
+        resolve_transport()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -601,14 +681,23 @@ def demo_prompt_scenarios() -> list[dict[str, str]]:
 
 def main():
     """
-    Start the MCP server in stdio mode.
+    Start the MCP server.
 
-    Configures logging and launches the FastMCP server using standard
-    input/output as the communication transport. This is the expected
-    entry point when the server is invoked as a subprocess by an MCP host.
+    Configures logging and launches the FastMCP server. The transport defaults
+    to stdio, which is the expected mode when the server is invoked as a
+    subprocess by an MCP host; set CODECARBON_MCP_TRANSPORT to 'sse' or
+    'streamable-http' to serve over the network instead. Note that the
+    run_and_measure tool is unavailable on those transports.
     """
-    logging.info("Starting MCP server...")
-    mcp.run(transport="stdio")
+    transport = resolve_transport()
+
+    logging.info("Starting MCP server (transport: %s)...", transport)
+    if not shell_execution_allowed(transport):
+        logging.info(
+            "Shell execution is disabled; the run_and_measure tool is not exposed."
+        )
+
+    mcp.run(transport=transport)
 
 
 if __name__ == "__main__":
